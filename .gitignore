@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+
+# AWS credentials
+.aws/
+credentials
+config
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
