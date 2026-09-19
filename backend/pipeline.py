@@ -1,6 +1,8 @@
 from backend.discovery.tavily_search_provider import TavilySearchProvider
 from backend.intelligence.bedrock_qualification import BedrockQualificationEngine
 from backend.intelligence.candidate_profile import get_candidate_profile
+from backend.intelligence.opportunity_filter import filter_opportunities
+from backend.intelligence.deduplication import deduplicate_jobs
 
 
 def run_pipeline(query: str):
@@ -10,6 +12,12 @@ def run_pipeline(query: str):
     jobs = provider.search(query)
 
     print(f"Discovered jobs: {len(jobs)}")
+
+    jobs = filter_opportunities(jobs)
+    print(f"Individual opportunities after filtering: {len(jobs)}")
+
+    jobs = deduplicate_jobs(jobs)
+    print(f"Unique opportunities after deduplication: {len(jobs)}")
 
     profile = get_candidate_profile()
     engine = BedrockQualificationEngine()
