@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+boto3
+tavily-python
+pytest
+streamlit==1.64.0

@@ -1,5 +1,12 @@
 from urllib.parse import urlparse
 
+from backend.config import TARGET_LOCATION, TARGET_ROLES
+
+
+LOCATION_ALIASES = {
+    "bengaluru": {"bengaluru", "bangalore"},
+}
+
 
 AGGREGATE_DOMAINS = (
     "indeed.com",
@@ -55,10 +62,36 @@ def is_aggregate_page(job) -> bool:
 
 
 def filter_opportunities(jobs):
-    """Remove obvious aggregate/search pages."""
+    """Remove aggregate pages and clearly out-of-target opportunities."""
 
-    return [
-        job
-        for job in jobs
-        if not is_aggregate_page(job)
-    ]
+    filtered = []
+    for job in jobs:
+        try:
+            if not is_aggregate_page(job) and is_relevant_opportunity(job):
+                filtered.append(job)
+        except (AttributeError, TypeError) as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Malformed opportunity skipped during filtering",
+                extra={"failure": str(exc)},
+            )
+    return filtered
+
+
+def is_relevant_opportunity(job) -> bool:
+    text = " ".join([
+        job.title or "",
+        job.description or "",
+        job.experience or "",
+    ]).lower()
+    location = (job.location or "").lower()
+    role_match = any(role.lower() in (job.title or "").lower() for role in TARGET_ROLES)
+    cloud_match = any(term in text for term in ("aws", "cloud", "devops", "infrastructure", "sre"))
+    target_location = TARGET_LOCATION.lower()
+    accepted_locations = LOCATION_ALIASES.get(target_location, {target_location})
+    location_match = bool(location) and any(
+        accepted in location
+        for accepted in accepted_locations
+    )
+    entry_level_match = any(term in text for term in ("0-1", "fresher", "intern", "entry", "graduate"))
+    return location_match and (role_match or cloud_match) and entry_level_match

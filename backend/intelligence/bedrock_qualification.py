@@ -1,9 +1,11 @@
 import json
+import re
 
 from backend.aws_client import bedrock_runtime
+from backend.config import BEDROCK_MODEL_ID
 
 
-MODEL_ID = "deepseek.v3.2"
+MODEL_ID = BEDROCK_MODEL_ID
 
 
 class BedrockQualificationEngine:
@@ -62,5 +64,11 @@ Rules:
             text = text.replace("```json", "", 1)
             text = text.replace("```", "", 1)
             text = text.strip()
+
+        text = re.sub(
+            r'("relevance_score"\s*:\s*)[—−]\s*(\d+)',
+            r"\g<1>\g<2>",
+            text,
+        )
 
         return json.loads(text)

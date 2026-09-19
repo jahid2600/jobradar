@@ -1,22 +1,29 @@
-import os
 import re
+import logging
 
 from tavily import TavilyClient
 from urllib.parse import urlparse
 
+from backend.config import (
+    TAVILY_API_KEY,
+    TAVILY_MAX_RESULTS,
+    TAVILY_SEARCH_DEPTH,
+)
 from backend.discovery.web_search_provider import WebSearchProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 class TavilySearchProvider(WebSearchProvider):
     """Real web search provider powered by Tavily."""
 
     def __init__(self):
-        api_key = os.getenv("TAVILY_API_KEY")
-
-        if not api_key:
+        if not TAVILY_API_KEY:
             raise ValueError("TAVILY_API_KEY environment variable is not set.")
 
-        self.client = TavilyClient(api_key=api_key)
+        self.client = TavilyClient(api_key=TAVILY_API_KEY)
+        self.last_failures = []
 
     @staticmethod
     def _extract_location(text: str) -> str:
@@ -102,24 +109,35 @@ class TavilySearchProvider(WebSearchProvider):
         return ""
 
     def search(self, query: str):
+        self.last_failures = []
         response = self.client.search(
             query=query,
-            max_results=5,
-            search_depth="advanced",
+            max_results=TAVILY_MAX_RESULTS,
+            search_depth=TAVILY_SEARCH_DEPTH,
         )
 
         results = []
 
         for item in response.get("results", []):
-            title = item.get("title", "")
-            content = item.get("content", "")
+            if not isinstance(item, dict):
+                self.last_failures.append("malformed Tavily result skipped")
+                logger.warning("Malformed Tavily result skipped")
+                continue
+
+            title = str(item.get("title", "") or "")
+            content = str(item.get("content", "") or "")
+            url = str(item.get("url", "") or "")
+            if not title or not url:
+                self.last_failures.append("malformed Tavily result missing title or URL")
+                logger.warning("Malformed Tavily result missing title or URL")
+                continue
             combined_text = f"{title} {content}"
 
             results.append({
                 "title": title,
-                "company": self._extract_company(title, content, item.get("url", "")),
+                "company": self._extract_company(title, content, url),
                 "location": self._extract_location(combined_text),
-                "url": item.get("url", ""),
+                "url": url,
                 "source": "tavily",
                 "description": content,
                 "experience": self._extract_experience(combined_text),
