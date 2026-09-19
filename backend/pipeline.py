@@ -6,6 +6,7 @@ from typing import Any, Callable
 from backend.config import (
     HARD_MAX_DISCOVERY_RESULTS,
     HARD_MAX_QUALIFICATION_CANDIDATES,
+    SNS_ENABLED,
     SEARCH_STRATEGY_MAX_QUERIES,
 )
 from backend.discovery.job_search import deterministic_search_strategy, get_search_strategy
@@ -14,6 +15,7 @@ from backend.intelligence.bedrock_qualification import BedrockQualificationEngin
 from backend.intelligence.candidate_profile import get_candidate_profile
 from backend.intelligence.deduplication import job_identity_keys
 from backend.intelligence.opportunity_filter import filter_opportunities
+from backend.notifications import notify_new_opportunities
 from backend.services.opportunity_service import DynamoDBOpportunityService
 from backend.storage.dynamodb_job_store import save_jobs_with_report
 from backend.storage.job_store import save_jobs as save_local_jobs
@@ -29,6 +31,7 @@ class PipelineRun:
     failures: list[str] = field(default_factory=list)
     generated_query_count: int = 0
     run_id: str | None = None
+    notification: dict[str, Any] = field(default_factory=dict)
 
 
 
@@ -63,6 +66,7 @@ def run_pipeline(
     return_details: bool = False,
     run_id: str | None = None,
     progress_callback: Callable[[str, int | None, dict[str, int], list[str]], None] | None = None,
+    notification_func: Callable[[list[dict[str, Any]], str | None], dict[str, Any]] = notify_new_opportunities,
 ) -> list[dict[str, Any]] | PipelineRun:
     """Run autonomous discovery and preserve the historic list return by default."""
 
@@ -70,6 +74,12 @@ def run_pipeline(
     profile = get_candidate_profile()
     failures = []
     metrics = _empty_metrics()
+    notification = {
+        "attempted": False,
+        "enabled": SNS_ENABLED,
+        "published": False,
+        "error": None,
+    }
 
     def emit(stage: str, progress: int | None = None) -> None:
         if progress_callback is None:
@@ -222,20 +232,36 @@ def run_pipeline(
         failures.append(f"local persistence: {exc}")
 
     if not existing_lookup_failed:
+        persisted_results = []
         try:
             persistence = save_dynamodb(new_results)
             if hasattr(persistence, "saved"):
-                metrics["persisted_new"] = len(persistence.saved)
+                persisted_results = persistence.saved
+                metrics["persisted_new"] = len(persisted_results)
                 metrics["existing"] += persistence.existing
                 metrics["persistence_failures"] = persistence.failures
             else:
-                metrics["persisted_new"] = len(persistence or [])
+                persisted_results = persistence or []
+                metrics["persisted_new"] = len(persisted_results)
                 metrics["persistence_failures"] = len(new_results) - metrics["persisted_new"]
             if metrics["persistence_failures"]:
                 failures.append(f"{metrics['persistence_failures']} DynamoDB writes failed")
         except Exception as exc:
             logger.exception("DynamoDB persistence failed", extra={"run_id": run_id})
             failures.append(f"DynamoDB persistence: {exc}")
+
+    if metrics["persisted_new"]:
+        try:
+            notification = notification_func(persisted_results, run_id)
+        except Exception as exc:
+            # Notification delivery must never change a successful radar run.
+            notification = {
+                "attempted": True,
+                "enabled": True,
+                "published": False,
+                "error": str(exc),
+            }
+            logger.exception("Notification integration failed", extra={"run_id": run_id})
 
     metrics["duration_ms"] = round((time.monotonic() - started_at) * 1000)
     metrics["new_opportunities"] = metrics["persisted_new"]
@@ -248,6 +274,7 @@ def run_pipeline(
         failures=failures,
         generated_query_count=len(queries),
         run_id=run_id,
+        notification=notification,
     )
     return run if return_details else results
 

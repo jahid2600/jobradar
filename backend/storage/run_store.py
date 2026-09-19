@@ -25,6 +25,12 @@ def new_run(run_id: str) -> dict[str, Any]:
         "metrics": {},
         "failures": [],
         "generated_query_count": 0,
+        "notification": {
+            "attempted": False,
+            "enabled": False,
+            "published": False,
+            "error": None,
+        },
         # Compatibility fields retained at the top level.
         "discovered": 0,
         "relevant": 0,

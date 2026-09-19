@@ -8,6 +8,14 @@ BEDROCK_REGION = os.getenv(
 DYNAMODB_REGION = os.getenv("AWS_DYNAMODB_REGION", "ap-south-1")
 DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "jobradar-jobs")
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "deepseek.v3.2")
+SNS_ENABLED = os.getenv("SNS_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN")
+SNS_REGION = os.getenv("SNS_REGION", BEDROCK_REGION)
 
 HARD_MAX_SEARCH_QUERIES = 8
 HARD_MAX_TAVILY_RESULTS_PER_QUERY = 10

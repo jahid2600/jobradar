@@ -42,6 +42,12 @@ def idle_run_status() -> dict[str, Any]:
         "metrics": {},
         "failures": [],
         "generated_query_count": 0,
+        "notification": {
+            "attempted": False,
+            "enabled": False,
+            "published": False,
+            "error": None,
+        },
         "discovered": 0,
         "relevant": 0,
         "duplicates": 0,
@@ -132,6 +138,7 @@ def execute_radar(run_id: str) -> None:
             metrics=run.metrics,
             failures=run.failures,
             generated_query_count=run.generated_query_count,
+            notification=run.notification,
         )
         logger.info("Radar run completed", extra={"run_id": run_id})
     except Exception as exc:

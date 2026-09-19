@@ -1,6 +1,6 @@
 import boto3
 
-from backend.config import BEDROCK_REGION, DYNAMODB_REGION
+from backend.config import BEDROCK_REGION, DYNAMODB_REGION, SNS_REGION
 
 bedrock_runtime = boto3.client(
     "bedrock-runtime",
@@ -24,7 +24,7 @@ sqs = boto3.client(
 
 sns = boto3.client(
     "sns",
-    region_name=BEDROCK_REGION,
+    region_name=SNS_REGION,
 )
 
 print("JobRadar AWS clients initialized successfully.")
