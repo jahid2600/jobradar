@@ -1,44 +1,46 @@
-from backend.discovery.mock_search_provider import MockSearchProvider
-from backend.intelligence.bedrock_qualification import (
-    BedrockQualificationEngine,
-)
+from backend.discovery.tavily_search_provider import TavilySearchProvider
+from backend.intelligence.bedrock_qualification import BedrockQualificationEngine
 from backend.intelligence.candidate_profile import get_candidate_profile
 
 
 def run_pipeline(query: str):
-    """Run the JobRadar discovery and qualification pipeline."""
+    print(f"\nSearching the web for: {query}\n")
 
-    print(f"\nSearching for: {query}\n")
-
-    # 1. Discover jobs
-    provider = MockSearchProvider()
+    provider = TavilySearchProvider()
     jobs = provider.search(query)
 
     print(f"Discovered jobs: {len(jobs)}")
 
-    # 2. Load candidate profile
     profile = get_candidate_profile()
-
-    # 3. Qualify jobs with Bedrock
     engine = BedrockQualificationEngine()
 
     results = []
 
-    for job in jobs:
-        print(f"\nAnalyzing: {job.title} at {job.company}")
+    for index, job in enumerate(jobs, start=1):
+        print(f"\n[{index}/{len(jobs)}] {job.title}")
+        print(f"URL: {job.url}")
 
-        result = engine.evaluate(job, profile)
+        qualification = engine.evaluate(job, profile)
 
-        results.append(
-            {
-                "job": job,
-                "qualification": result,
-            }
-        )
+        result = {
+            "job": job,
+            "qualification": qualification,
+        }
 
-        print(f"Qualified: {result['qualified']}")
-        print(f"Score: {result['relevance_score']}")
-        print(f"Reason: {result['reason']}")
+        results.append(result)
+
+        print(f"Qualified: {qualification['qualified']}")
+        print(f"Score: {qualification['relevance_score']}")
+        print(f"Reason: {qualification['reason']}")
+
+    qualified_count = sum(
+        1 for result in results
+        if result["qualification"]["qualified"]
+    )
+
+    print("\n===== JOBRADAR SUMMARY =====")
+    print(f"Jobs discovered: {len(results)}")
+    print(f"Qualified opportunities: {qualified_count}")
 
     return results
 
