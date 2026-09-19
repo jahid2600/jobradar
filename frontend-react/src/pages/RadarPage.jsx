@@ -7,12 +7,14 @@ import {
 } from "lucide-react";
 
 const pipelineSteps = [
-  "Load target profile",
-  "Search the web",
-  "Normalize results",
-  "Deduplicate",
-  "Evaluate with Bedrock",
-  "Store opportunities",
+  { id: "generating_strategy", label: "Generating search strategy" },
+  { id: "searching", label: "Expanding / searching" },
+  { id: "normalizing", label: "Normalizing" },
+  { id: "filtering", label: "Filtering" },
+  { id: "deduplicating", label: "Removing duplicates" },
+  { id: "qualifying", label: "Evaluating with Bedrock" },
+  { id: "persisting", label: "Persisting opportunities" },
+  { id: "completed", label: "Completed" },
 ];
 
 function StatCard({ label, value, accent }) {
@@ -26,6 +28,8 @@ function StatCard({ label, value, accent }) {
 
 function RadarPage({ stats, running, statusError, onRun, onRetry }) {
   const statusLabel = stats.status === "error" ? "SCAN ERROR" : running ? "RADAR RUNNING" : "RADAR STATUS";
+  const currentStageIndex = pipelineSteps.findIndex((item) => item.id === stats.current_stage);
+  const completedStageIndex = stats.status === "completed" ? pipelineSteps.length : currentStageIndex;
 
   return (
     <div className="page-content">
@@ -67,12 +71,17 @@ function RadarPage({ stats, running, statusError, onRun, onRetry }) {
             <span className="live-badge"><span className="live-dot" /> LIVE</span>
           </div>
           <div className="scan-steps">
-            {pipelineSteps.map((item, index) => (
-              <div className="scan-step current" key={item}>
-                <div className="step-icon">{index === 0 ? <span className="pulse" /> : <Circle size={10} />}</div>
-                <span>{item}</span>
+            {pipelineSteps.map((item, index) => {
+              const isComplete = index < completedStageIndex;
+              const isCurrent = running && index === currentStageIndex;
+              return (
+              <div className={`scan-step ${isComplete ? "complete" : ""} ${isCurrent ? "current" : ""}`} key={item.id}>
+                <div className="step-icon">{isComplete ? "✓" : isCurrent ? <span className="pulse" /> : <Circle size={10} />}</div>
+                <span>{item.label}</span>
+                {isCurrent && stats.stage_progress !== null && <small>{stats.stage_progress}%</small>}
               </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}

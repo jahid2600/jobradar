@@ -83,3 +83,33 @@ def test_pipeline_falls_back_when_strategy_factory_fails():
 
     assert run.metrics["raw_discovered"] > 0
     assert any("search strategy" in failure for failure in run.failures)
+
+
+def test_pipeline_reports_real_stage_transitions():
+    stages = []
+    run_pipeline(
+        provider_factory=FakeProvider,
+        strategy_factory=lambda profile: {"search_queries": ["q1"]},
+        qualification_engine=FakeQualificationEngine(),
+        opportunity_service=FakeOpportunityService(),
+        save_dynamodb=lambda results: results,
+        save_local=lambda results: None,
+        progress_callback=lambda stage, progress, metrics, failures: stages.append((stage, progress, metrics)),
+        return_details=True,
+    )
+
+    assert [stage for stage, _, _ in stages] == [
+        "generating_strategy",
+        "searching",
+        "searching",
+        "normalizing",
+        "filtering",
+        "deduplicating",
+        "qualifying",
+        "qualifying",
+        "qualifying",
+        "persisting",
+        "persisting",
+        "completed",
+    ]
+    assert stages[3][2]["raw_discovered"] == 4

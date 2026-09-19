@@ -13,6 +13,8 @@ HARD_MAX_SEARCH_QUERIES = 8
 HARD_MAX_TAVILY_RESULTS_PER_QUERY = 10
 HARD_MAX_DISCOVERY_RESULTS = 50
 HARD_MAX_QUALIFICATION_CANDIDATES = 50
+MAX_RADAR_RUN_HISTORY = 25
+RADAR_RUNS_FILE = os.getenv("RADAR_RUNS_FILE", "data/radar_runs.json")
 
 
 def _bounded_int(name: str, default: int, maximum: int) -> int:

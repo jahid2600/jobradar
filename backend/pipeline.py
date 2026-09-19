@@ -27,6 +27,8 @@ class PipelineRun:
     results: list[dict[str, Any]]
     metrics: dict[str, int]
     failures: list[str] = field(default_factory=list)
+    generated_query_count: int = 0
+    run_id: str | None = None
 
 
 
@@ -59,6 +61,8 @@ def run_pipeline(
     save_dynamodb: Callable[[list[dict[str, Any]]], Any] = save_jobs_with_report,
     save_local: Callable[[list[dict[str, Any]]], None] = save_local_jobs,
     return_details: bool = False,
+    run_id: str | None = None,
+    progress_callback: Callable[[str, int | None, dict[str, int], list[str]], None] | None = None,
 ) -> list[dict[str, Any]] | PipelineRun:
     """Run autonomous discovery and preserve the historic list return by default."""
 
@@ -67,15 +71,26 @@ def run_pipeline(
     failures = []
     metrics = _empty_metrics()
 
+    def emit(stage: str, progress: int | None = None) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(stage, progress, dict(metrics), list(failures))
+        except Exception:
+            logger.exception("Pipeline progress callback failed", extra={"run_id": run_id})
+
+    logger.info("Radar pipeline started", extra={"run_id": run_id})
+    emit("generating_strategy")
+
     try:
         strategy = strategy_factory(profile)
     except Exception as exc:
-        logger.exception("Search strategy generation failed")
+        logger.exception("Search strategy generation failed", extra={"run_id": run_id})
         failures.append(f"search strategy: {exc}")
         strategy = deterministic_search_strategy(profile)
 
     if not strategy.get("search_queries"):
-        logger.warning("Search strategy was empty; using deterministic fallback")
+        logger.warning("Search strategy was empty; using deterministic fallback", extra={"run_id": run_id})
         failures.append("search strategy returned no queries")
         strategy = deterministic_search_strategy(profile)
 
@@ -84,22 +99,23 @@ def run_pipeline(
         queries = [query, *queries]
     queries = queries[:SEARCH_STRATEGY_MAX_QUERIES]
 
-    logger.info("Search strategy ready", extra={"query_count": len(queries)})
+    logger.info("Search strategy ready", extra={"run_id": run_id, "query_count": len(queries)})
+    emit("searching", 0)
     discovered_jobs = []
 
     try:
         provider = provider_factory()
     except Exception as exc:
-        logger.exception("Search provider initialization failed")
+        logger.exception("Search provider initialization failed", extra={"run_id": run_id})
         failures.append(f"search provider initialization: {exc}")
         provider = None
 
     if provider is not None:
-        for search_query in queries:
+        for query_index, search_query in enumerate(queries, start=1):
             if len(discovered_jobs) >= HARD_MAX_DISCOVERY_RESULTS:
                 failures.append("discovery result cap reached")
                 break
-            logger.info("Searching query", extra={"query": search_query})
+            logger.info("Searching query", extra={"run_id": run_id, "query": search_query})
             try:
                 query_jobs = provider.search(search_query)
                 if not isinstance(query_jobs, list):
@@ -113,31 +129,34 @@ def run_pipeline(
                         discovered_jobs.append(job)
                     except (AttributeError, TypeError, ValueError) as malformed_exc:
                         failures.append(f"malformed result: {malformed_exc}")
-                        logger.warning("Malformed normalized opportunity skipped", extra={"failure": str(malformed_exc)})
-                logger.info("Search query completed", extra={"query": search_query, "count": metrics_raw_count})
+                        logger.warning("Malformed normalized opportunity skipped", extra={"run_id": run_id, "failure": str(malformed_exc)})
+                logger.info("Search query completed", extra={"run_id": run_id, "query": search_query, "count": metrics_raw_count})
                 failures.extend(getattr(provider, "last_failures", []))
             except Exception as exc:
-                logger.exception("Search query failed", extra={"query": search_query})
+                logger.exception("Search query failed", extra={"run_id": run_id, "query": search_query})
                 failures.append(f"search query '{search_query}': {exc}")
+            emit("searching", round(query_index / len(queries) * 100) if queries else None)
 
     metrics["raw_discovered"] = len(discovered_jobs)
-    logger.info("Raw discovery complete", extra={"raw_discovered": metrics["raw_discovered"]})
+    logger.info("Raw discovery complete", extra={"run_id": run_id, "raw_discovered": metrics["raw_discovered"]})
+    emit("normalizing")
 
     try:
         filtered_jobs = filter_opportunities(discovered_jobs)
     except Exception as exc:
-        logger.exception("Opportunity filtering failed")
+        logger.exception("Opportunity filtering failed", extra={"run_id": run_id})
         failures.append(f"filtering: {exc}")
         filtered_jobs = []
 
     metrics["filtered"] = len(filtered_jobs)
+    emit("filtering")
     unique_jobs = []
     seen_keys = set()
     for job in filtered_jobs:
         try:
             keys = _job_keys(job)
         except (AttributeError, TypeError) as exc:
-            logger.warning("Malformed opportunity skipped", extra={"failure": str(exc)})
+            logger.warning("Malformed opportunity skipped", extra={"run_id": run_id, "failure": str(exc)})
             failures.append(f"malformed result: {exc}")
             continue
         if keys & seen_keys:
@@ -147,7 +166,8 @@ def run_pipeline(
         unique_jobs.append(job)
 
     metrics["unique"] = len(unique_jobs)
-    logger.info("Filtering and deduplication complete", extra={"filtered": metrics["filtered"], "unique": metrics["unique"], "duplicates": metrics["duplicates"]})
+    logger.info("Filtering and deduplication complete", extra={"run_id": run_id, "filtered": metrics["filtered"], "unique": metrics["unique"], "duplicates": metrics["duplicates"]})
+    emit("deduplicating")
 
     engine = qualification_engine or BedrockQualificationEngine()
     if len(unique_jobs) > HARD_MAX_QUALIFICATION_CANDIDATES:
@@ -155,16 +175,18 @@ def run_pipeline(
         unique_jobs = unique_jobs[:HARD_MAX_QUALIFICATION_CANDIDATES]
         metrics["unique"] = len(unique_jobs)
     results = []
+    emit("qualifying", 0)
     for index, job in enumerate(unique_jobs, start=1):
         try:
             qualification = engine.evaluate(job, profile)
             results.append({"job": job, "qualification": qualification})
             if qualification.get("qualified", False):
                 metrics["qualified"] += 1
-            logger.info("Opportunity qualified", extra={"index": index, "qualified": qualification.get("qualified", False)})
+            logger.info("Opportunity qualified", extra={"run_id": run_id, "index": index, "qualified": qualification.get("qualified", False)})
         except Exception as exc:
-            logger.exception("Opportunity qualification failed", extra={"index": index})
+            logger.exception("Opportunity qualification failed", extra={"run_id": run_id, "index": index})
             failures.append(f"qualification for '{getattr(job, 'title', 'unknown')}': {exc}")
+        emit("qualifying", round(index / len(unique_jobs) * 100) if unique_jobs else 100)
 
     qualified_results = [
         result for result in results
@@ -177,7 +199,7 @@ def run_pipeline(
     try:
         existing_keys = service.existing_identities()
     except Exception as exc:
-        logger.exception("Existing opportunity lookup failed")
+        logger.exception("Existing opportunity lookup failed", extra={"run_id": run_id})
         failures.append(f"existing opportunity lookup: {exc}")
         existing_lookup_failed = True
 
@@ -190,12 +212,13 @@ def run_pipeline(
             new_results.append(result)
 
     metrics["new_candidates"] = len(new_results)
-    logger.info("Existing opportunity comparison complete", extra={"existing": metrics["existing"], "new_candidates": metrics["new_candidates"]})
+    logger.info("Existing opportunity comparison complete", extra={"run_id": run_id, "existing": metrics["existing"], "new_candidates": metrics["new_candidates"]})
+    emit("persisting", 0)
 
     try:
         save_local(new_results)
     except Exception as exc:
-        logger.exception("Local opportunity persistence failed")
+        logger.exception("Local opportunity persistence failed", extra={"run_id": run_id})
         failures.append(f"local persistence: {exc}")
 
     if not existing_lookup_failed:
@@ -211,13 +234,21 @@ def run_pipeline(
             if metrics["persistence_failures"]:
                 failures.append(f"{metrics['persistence_failures']} DynamoDB writes failed")
         except Exception as exc:
-            logger.exception("DynamoDB persistence failed")
+            logger.exception("DynamoDB persistence failed", extra={"run_id": run_id})
             failures.append(f"DynamoDB persistence: {exc}")
 
     metrics["duration_ms"] = round((time.monotonic() - started_at) * 1000)
     metrics["new_opportunities"] = metrics["persisted_new"]
-    logger.info("Radar pipeline complete", extra={"metrics": metrics, "failure_count": len(failures)})
-    run = PipelineRun(results=results, metrics=metrics, failures=failures)
+    emit("persisting", 100)
+    logger.info("Radar pipeline complete", extra={"run_id": run_id, "metrics": metrics, "failure_count": len(failures)})
+    emit("completed", 100)
+    run = PipelineRun(
+        results=results,
+        metrics=metrics,
+        failures=failures,
+        generated_query_count=len(queries),
+        run_id=run_id,
+    )
     return run if return_details else results
 
 
