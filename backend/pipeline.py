@@ -3,7 +3,8 @@ from backend.intelligence.bedrock_qualification import BedrockQualificationEngin
 from backend.intelligence.candidate_profile import get_candidate_profile
 from backend.intelligence.opportunity_filter import filter_opportunities
 from backend.intelligence.deduplication import deduplicate_jobs
-from backend.storage.job_store import save_jobs
+from backend.storage.dynamodb_job_store import save_jobs as save_dynamodb_jobs
+from backend.storage.job_store import save_jobs as save_local_jobs
 
 
 def run_pipeline(query: str):
@@ -51,8 +52,9 @@ def run_pipeline(query: str):
     print(f"Jobs discovered: {len(results)}")
     print(f"Qualified opportunities: {qualified_count}")
 
-    save_jobs(results)
-    print("Results saved to data/jobs.json")
+    save_local_jobs(results)
+    save_dynamodb_jobs(results)
+    print("Results saved to data/jobs.json and DynamoDB")
 
     return results
 

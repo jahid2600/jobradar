@@ -14,7 +14,7 @@ s3 = boto3.client(
 
 dynamodb = boto3.client(
     "dynamodb",
-    region_name=AWS_REGION
+    region_name="ap-south-1"
 )
 
 sqs = boto3.client(
