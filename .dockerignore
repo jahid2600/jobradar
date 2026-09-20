@@ -1,0 +1,39 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.pyright
+.coverage
+htmlcov
+.env
+.env.*
+!.env.example
+.aws
+credentials
+config
+
+# Local runtime data and state
+data
+*.tfstate
+*.tfstate.*
+.terraform
+crash.log
+crash.*.log
+
+# Frontend sources and generated artifacts
+frontend-react/node_modules
+frontend-react/dist
+frontend-react/build
+frontend/node_modules
+frontend/.streamlit
+
+# Development and editor files
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+node_modules
+npm-debug.log*
