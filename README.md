@@ -30,6 +30,7 @@ JobRadar turns a target profile into an autonomous discovery pipeline:
 8. Persists only new qualified opportunities to DynamoDB.
 9. Publishes one grouped SNS notification when new records are successfully stored and notifications are enabled.
 10. Supports private scheduled execution through an AWS Lambda adapter and EventBridge Scheduler Terraform configuration.
+11. Can optionally archive raw discovery payloads to encrypted S3 and hand off discovery jobs to SQS for Lambda processing.
 
 JobRadar keeps applications user-controlled. It discovers and explains opportunities; it does not apply on the user's behalf.
 
@@ -53,17 +54,26 @@ Implemented services and components:
 - **Amazon Bedrock**: search-strategy generation and semantic job qualification.
 - **Tavily**: web job discovery provider.
 - **DynamoDB**: persistent job opportunities and distributed radar execution lock.
+- **Amazon S3**: optional encrypted raw discovery snapshots with lifecycle expiration.
+- **Amazon SQS**: optional discovery queue with visibility timeout, retry redrive, and a dead-letter queue.
 - **Amazon SNS**: optional grouped notifications, disabled by default.
+- **AWS Secrets Manager**: optional deployed-workload lookup for the Tavily API key.
+- **Amazon CloudWatch**: optional low-cardinality run metrics and a Terraform failure alarm.
 - **AWS Lambda adapter**: `backend/scheduler_handler.py` provides the handler contract for a private scheduler target.
 - **EventBridge Scheduler**: Terraform support for a configurable schedule, retry policy, timezone, and least-privilege Lambda invocation role.
 - **Terraform**: provisions the jobs table, radar lock table, Scheduler resources, Scheduler IAM role, and lock access policy.
 - **Application logging**: Python structured log context includes run IDs and trigger types. No direct CloudWatch resource is provisioned in this repository; deployed AWS runtimes can route these logs to CloudWatch.
 
+Implemented as opt-in/deployable features, but disabled by default locally:
+
+- S3 raw discovery archival
+- SQS discovery queue and Lambda-compatible queue processor
+- CloudWatch metric publication
+- Secrets Manager Tavily lookup
+
 Not currently implemented as active JobRadar features:
 
 - Cognito authentication
-- S3 persistence
-- SQS workflows
 - EventBridge scheduling deployment without an existing private Lambda target
 
 ### Architecture Diagram
@@ -90,7 +100,12 @@ flowchart LR
     BedrockQualification --> Existing[DynamoDB existing-opportunity lookup]
     Existing --> Persist[DynamoDB conditional persistence]
     Persist --> Jobs[DynamoDB jobs table]
+    Tavily --> RawS3[Optional encrypted S3 raw snapshot]
+    Dedup --> Queue[Optional SQS discovery queue]
+    Queue --> Processor[Lambda-compatible queue processor]
+    Processor --> BedrockQualification
     Persist --> SNS[Optional grouped Amazon SNS notification]
+    Pipeline --> Metrics[Optional CloudWatch metrics]
 
     Pipeline --> RunHistory[Local persistent radar run history]
     API --> RunHistory
@@ -136,7 +151,11 @@ An editable session-local view of location, experience, target roles, skills, an
 - Amazon Bedrock Runtime
 - Tavily Python client
 - DynamoDB
+- Amazon S3
+- Amazon SQS + dead-letter queue
 - Amazon SNS
+- AWS Secrets Manager
+- Amazon CloudWatch metrics
 - AWS Lambda adapter contract
 - EventBridge Scheduler Terraform resources
 - Terraform
@@ -191,6 +210,20 @@ TAVILY_API_KEY=your-key
 TAVILY_MAX_RESULTS=5
 TAVILY_SEARCH_DEPTH=advanced
 SEARCH_STRATEGY_MAX_QUERIES=8
+S3_RAW_DISCOVERY_ENABLED=false
+S3_RAW_DISCOVERY_BUCKET=
+S3_RAW_DISCOVERY_PREFIX=raw-discovery
+S3_REGION=us-east-1
+SQS_ENABLED=false
+SQS_ASYNC_PROCESSING=false
+SQS_DISCOVERY_QUEUE_URL=
+SQS_REGION=us-east-1
+SQS_VISIBILITY_TIMEOUT_SECONDS=900
+SQS_MAX_RECEIVE_COUNT=3
+CLOUDWATCH_METRICS_ENABLED=false
+CLOUDWATCH_METRICS_NAMESPACE=JobRadar
+CLOUDWATCH_REGION=us-east-1
+TAVILY_SECRET_ARN=
 ```
 
 SNS is disabled by default:
@@ -216,6 +249,8 @@ RADAR_LOCK_LEASE_SECONDS=3600
 
 The discovery and qualification limits have hard server-side safety ceilings. Environment values may lower configured limits but cannot raise the absolute caps.
 
+When `SQS_ENABLED` is true, discovery envelopes are published to the configured queue. `SQS_ASYNC_PROCESSING=true` selects the optional queue-first Lambda handoff; the default remains synchronous so local development and the live demo continue to qualify and persist in one process. When both `TAVILY_SECRET_ARN` and no local `TAVILY_API_KEY` are present, the Tavily provider reads the key from Secrets Manager without logging it.
+
 ## API Endpoints
 
 - `GET /api/health`
@@ -239,11 +274,13 @@ cd frontend-react && npm run lint && npm run build
 cd terraform && terraform fmt -check && terraform validate
 ```
 
-At the current checkpoint, the full backend suite reports **43 passed**. The React lint, React production build, Python compilation, Terraform formatting check, and Terraform validation also pass.
+At the current checkpoint, the full backend suite reports **49 passed**. The React lint, React production build, Python compilation, Terraform formatting check, and Terraform validation also pass.
 
 ## AWS Deployment Notes
 
 EventBridge Scheduler support is present in Terraform, but the repository expects an existing private scheduler-adapter Lambda ARN through `radar_scheduler_target_lambda_arn`. A production Lambda packaging/deployment pipeline is not currently included.
+
+Terraform also provisions the optional raw-discovery S3 bucket, discovery SQS queue and dead-letter queue, optional Tavily secret container, CloudWatch failure alarm, and IAM policies for runtime event-driven access. These resources are configuration/deployment artifacts; this repository does not claim that they are deployed in the current environment.
 
 Terraform creates the Scheduler role and schedule only when both are supplied:
 
@@ -262,6 +299,9 @@ The Scheduler role can invoke only that Lambda ARN. The separate lock policy gra
 - The radar lock policy is scoped to the lock table and only the operations required by the lease.
 - SNS is disabled by default.
 - Search and qualification output is bounded to control external API usage.
+- Raw discovery storage is opt-in, encrypted with S3-managed keys, and lifecycle-limited.
+- SQS processing is opt-in and uses a dead-letter queue for repeated failures.
+- CloudWatch metrics intentionally avoid job descriptions, candidate data, credentials, and secret values.
 - Application decisions remain user-controlled; JobRadar does not submit applications automatically.
 
 ## Future Improvements

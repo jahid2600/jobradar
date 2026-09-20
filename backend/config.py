@@ -16,6 +16,28 @@ SNS_ENABLED = os.getenv("SNS_ENABLED", "false").strip().lower() in {
 }
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN")
 SNS_REGION = os.getenv("SNS_REGION", BEDROCK_REGION)
+S3_RAW_DISCOVERY_ENABLED = os.getenv("S3_RAW_DISCOVERY_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+S3_REGION = os.getenv("S3_REGION", BEDROCK_REGION)
+S3_RAW_DISCOVERY_BUCKET = os.getenv("S3_RAW_DISCOVERY_BUCKET")
+S3_RAW_DISCOVERY_PREFIX = os.getenv("S3_RAW_DISCOVERY_PREFIX", "raw-discovery")
+SQS_ENABLED = os.getenv("SQS_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+SQS_ASYNC_PROCESSING = os.getenv("SQS_ASYNC_PROCESSING", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+SQS_DISCOVERY_QUEUE_URL = os.getenv("SQS_DISCOVERY_QUEUE_URL")
+SQS_REGION = os.getenv("SQS_REGION", BEDROCK_REGION)
+SQS_VISIBILITY_TIMEOUT_SECONDS = int(os.getenv("SQS_VISIBILITY_TIMEOUT_SECONDS", "900"))
+SQS_MAX_RECEIVE_COUNT = int(os.getenv("SQS_MAX_RECEIVE_COUNT", "3"))
+CLOUDWATCH_METRICS_ENABLED = os.getenv("CLOUDWATCH_METRICS_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+CLOUDWATCH_METRICS_NAMESPACE = os.getenv("CLOUDWATCH_METRICS_NAMESPACE", "JobRadar")
+CLOUDWATCH_REGION = os.getenv("CLOUDWATCH_REGION", BEDROCK_REGION)
+TAVILY_SECRET_ARN = os.getenv("TAVILY_SECRET_ARN")
 RADAR_SCHEDULE_ENABLED = os.getenv("RADAR_SCHEDULE_ENABLED", "false").strip().lower() in {
     "1", "true", "yes", "on",
 }

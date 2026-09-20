@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.pipeline import run_pipeline
 from backend.config import RADAR_LOCK_ENABLED, RADAR_SCHEDULE_ENABLED
+from backend.observability import publish_run_metrics
 from backend.services.opportunity_service import DynamoDBOpportunityService
 from backend.storage.radar_lock import RadarExecutionLock, LockLease
 from backend.storage.run_store import RadarRunStore, utc_now
@@ -167,6 +168,11 @@ def execute_radar(run_id: str, trigger_type: str = "manual", lease: LockLease | 
             duration_ms=duration_ms,
             failures=failures,
             trigger={"type": trigger_type},
+        )
+        publish_run_metrics(
+            current.get("metrics", {}),
+            success=False,
+            notification_failure=False,
         )
     finally:
         if lease is not None:

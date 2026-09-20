@@ -8,6 +8,8 @@ from backend.config import (
     HARD_MAX_QUALIFICATION_CANDIDATES,
     SNS_ENABLED,
     SEARCH_STRATEGY_MAX_QUERIES,
+    SQS_ASYNC_PROCESSING,
+    SQS_ENABLED,
 )
 from backend.discovery.job_search import deterministic_search_strategy, get_search_strategy
 from backend.discovery.tavily_search_provider import TavilySearchProvider
@@ -16,9 +18,12 @@ from backend.intelligence.candidate_profile import get_candidate_profile
 from backend.intelligence.deduplication import job_identity_keys
 from backend.intelligence.opportunity_filter import filter_opportunities
 from backend.notifications import notify_new_opportunities
+from backend.observability import publish_run_metrics
+from backend.queueing import enqueue_discovery_jobs
 from backend.services.opportunity_service import DynamoDBOpportunityService
 from backend.storage.dynamodb_job_store import save_jobs_with_report
 from backend.storage.job_store import save_jobs as save_local_jobs
+from backend.storage.raw_discovery_store import store_raw_discovery
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +52,8 @@ def _empty_metrics() -> dict[str, int]:
         "persisted_new": 0,
         "existing": 0,
         "persistence_failures": 0,
+        "queued": 0,
+        "queue_failures": 0,
     }
 
 
@@ -112,6 +119,7 @@ def run_pipeline(
     logger.info("Search strategy ready", extra={"run_id": run_id, "query_count": len(queries)})
     emit("searching", 0)
     discovered_jobs = []
+    raw_payloads = []
 
     try:
         provider = provider_factory()
@@ -127,7 +135,11 @@ def run_pipeline(
                 break
             logger.info("Searching query", extra={"run_id": run_id, "query": search_query})
             try:
-                query_jobs = provider.search(search_query)
+                if hasattr(provider, "search_with_raw"):
+                    raw_items, query_jobs = provider.search_with_raw(search_query)
+                    raw_payloads.extend(raw_items if isinstance(raw_items, list) else [])
+                else:
+                    query_jobs = provider.search(search_query)
                 if not isinstance(query_jobs, list):
                     raise ValueError("search provider did not return a list")
                 remaining = HARD_MAX_DISCOVERY_RESULTS - len(discovered_jobs)
@@ -148,6 +160,9 @@ def run_pipeline(
             emit("searching", round(query_index / len(queries) * 100) if queries else None)
 
     metrics["raw_discovered"] = len(discovered_jobs)
+    raw_storage = store_raw_discovery(run_id or "unassigned", raw_payloads or discovered_jobs)
+    if raw_storage["failures"]:
+        failures.append(f"{raw_storage['failures']} raw S3 writes failed")
     logger.info("Raw discovery complete", extra={"run_id": run_id, "raw_discovered": metrics["raw_discovered"]})
     emit("normalizing")
 
@@ -178,6 +193,27 @@ def run_pipeline(
     metrics["unique"] = len(unique_jobs)
     logger.info("Filtering and deduplication complete", extra={"run_id": run_id, "filtered": metrics["filtered"], "unique": metrics["unique"], "duplicates": metrics["duplicates"]})
     emit("deduplicating")
+
+    queue_result = enqueue_discovery_jobs(unique_jobs, run_id, profile)
+    metrics["queued"] = queue_result["enqueued"]
+    metrics["queue_failures"] = queue_result["failures"]
+    if queue_result["failures"]:
+        failures.append(f"{queue_result['failures']} SQS enqueue operations failed")
+
+    if SQS_ENABLED and SQS_ASYNC_PROCESSING:
+        metrics["duration_ms"] = round((time.monotonic() - started_at) * 1000)
+        metrics["new_opportunities"] = 0
+        publish_run_metrics(metrics, success=not failures, notification_failure=False)
+        emit("completed", 100)
+        run = PipelineRun(
+            results=[],
+            metrics=metrics,
+            failures=failures,
+            generated_query_count=len(queries),
+            run_id=run_id,
+            notification=notification,
+        )
+        return run if return_details else []
 
     engine = qualification_engine or BedrockQualificationEngine()
     if len(unique_jobs) > HARD_MAX_QUALIFICATION_CANDIDATES:
@@ -267,6 +303,11 @@ def run_pipeline(
     metrics["new_opportunities"] = metrics["persisted_new"]
     emit("persisting", 100)
     logger.info("Radar pipeline complete", extra={"run_id": run_id, "metrics": metrics, "failure_count": len(failures)})
+    publish_run_metrics(
+        metrics,
+        success=not failures,
+        notification_failure=bool(notification.get("error")),
+    )
     emit("completed", 100)
     run = PipelineRun(
         results=results,

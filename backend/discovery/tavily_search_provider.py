@@ -1,5 +1,6 @@
 import re
 import logging
+import json
 
 from tavily import TavilyClient
 from urllib.parse import urlparse
@@ -8,7 +9,9 @@ from backend.config import (
     TAVILY_API_KEY,
     TAVILY_MAX_RESULTS,
     TAVILY_SEARCH_DEPTH,
+    TAVILY_SECRET_ARN,
 )
+from backend.aws_client import secretsmanager
 from backend.discovery.web_search_provider import WebSearchProvider
 
 
@@ -19,11 +22,28 @@ class TavilySearchProvider(WebSearchProvider):
     """Real web search provider powered by Tavily."""
 
     def __init__(self):
-        if not TAVILY_API_KEY:
+        api_key = TAVILY_API_KEY or self._load_secret_key()
+        if not api_key:
             raise ValueError("TAVILY_API_KEY environment variable is not set.")
 
-        self.client = TavilyClient(api_key=TAVILY_API_KEY)
+        self.client = TavilyClient(api_key=api_key)
         self.last_failures = []
+
+    @staticmethod
+    def _load_secret_key():
+        if not TAVILY_SECRET_ARN:
+            return None
+        try:
+            response = secretsmanager.get_secret_value(SecretId=TAVILY_SECRET_ARN)
+            secret = response.get("SecretString", "")
+            try:
+                parsed = json.loads(secret)
+                return parsed.get("TAVILY_API_KEY") or parsed.get("api_key")
+            except json.JSONDecodeError:
+                return secret or None
+        except Exception:
+            logger.exception("Tavily secret lookup failed")
+            return None
 
     @staticmethod
     def _extract_location(text: str) -> str:
@@ -109,6 +129,10 @@ class TavilySearchProvider(WebSearchProvider):
         return ""
 
     def search(self, query: str):
+        _, jobs = self.search_with_raw(query)
+        return jobs
+
+    def search_with_raw(self, query: str):
         self.last_failures = []
         response = self.client.search(
             query=query,
@@ -116,9 +140,10 @@ class TavilySearchProvider(WebSearchProvider):
             search_depth=TAVILY_SEARCH_DEPTH,
         )
 
+        raw_results = response.get("results", [])
         results = []
 
-        for item in response.get("results", []):
+        for item in raw_results:
             if not isinstance(item, dict):
                 self.last_failures.append("malformed Tavily result skipped")
                 logger.warning("Malformed Tavily result skipped")
@@ -143,4 +168,4 @@ class TavilySearchProvider(WebSearchProvider):
                 "experience": self._extract_experience(combined_text),
             })
 
-        return self.normalize_results(results)
+        return raw_results, self.normalize_results(results)
