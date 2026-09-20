@@ -22,7 +22,7 @@ app = FastAPI(title="JobRadar API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173","http://jobradar-162590584566.s3-website.ap-south-1.amazonaws.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
