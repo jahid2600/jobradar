@@ -16,6 +16,17 @@ SNS_ENABLED = os.getenv("SNS_ENABLED", "false").strip().lower() in {
 }
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN")
 SNS_REGION = os.getenv("SNS_REGION", BEDROCK_REGION)
+RADAR_SCHEDULE_ENABLED = os.getenv("RADAR_SCHEDULE_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+RADAR_SCHEDULE_EXPRESSION = os.getenv("RADAR_SCHEDULE_EXPRESSION", "rate(1 day)")
+RADAR_SCHEDULE_TIMEZONE = os.getenv("RADAR_SCHEDULE_TIMEZONE", "Asia/Kolkata")
+RADAR_LOCK_ENABLED = os.getenv("RADAR_LOCK_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+RADAR_LOCK_TABLE_NAME = os.getenv("RADAR_LOCK_TABLE_NAME", "jobradar-radar-locks")
+RADAR_LOCK_KEY = os.getenv("RADAR_LOCK_KEY", "radar-execution")
+RADAR_LOCK_LEASE_SECONDS = int(os.getenv("RADAR_LOCK_LEASE_SECONDS", "3600"))
 
 HARD_MAX_SEARCH_QUERIES = 8
 HARD_MAX_TAVILY_RESULTS_PER_QUERY = 10

@@ -10,7 +10,9 @@ from fastapi import BackgroundTasks, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.pipeline import run_pipeline
+from backend.config import RADAR_LOCK_ENABLED, RADAR_SCHEDULE_ENABLED
 from backend.services.opportunity_service import DynamoDBOpportunityService
+from backend.storage.radar_lock import RadarExecutionLock, LockLease
 from backend.storage.run_store import RadarRunStore, utc_now
 
 
@@ -28,6 +30,7 @@ app.add_middleware(
 STATUS_FILE = Path("data/latest_run.json")
 run_store = RadarRunStore()
 opportunity_service = DynamoDBOpportunityService()
+radar_lock = RadarExecutionLock()
 
 
 def idle_run_status() -> dict[str, Any]:
@@ -48,6 +51,7 @@ def idle_run_status() -> dict[str, Any]:
             "published": False,
             "error": None,
         },
+        "trigger": {"type": "manual"},
         "discovered": 0,
         "relevant": 0,
         "duplicates": 0,
@@ -120,8 +124,8 @@ def health():
     return {"status": "online", "service": "JobRadar API"}
 
 
-def execute_radar(run_id: str) -> None:
-    logger.info("Radar run started", extra={"run_id": run_id})
+def execute_radar(run_id: str, trigger_type: str = "manual", lease: LockLease | None = None) -> None:
+    logger.info("Radar run started", extra={"run_id": run_id, "trigger": trigger_type})
     try:
         run = run_pipeline(
             return_details=True,
@@ -139,8 +143,9 @@ def execute_radar(run_id: str) -> None:
             failures=run.failures,
             generated_query_count=run.generated_query_count,
             notification=run.notification,
+            trigger={"type": trigger_type},
         )
-        logger.info("Radar run completed", extra={"run_id": run_id})
+        logger.info("Radar run completed", extra={"run_id": run_id, "trigger": trigger_type})
     except Exception as exc:
         logger.exception("Radar run failed", extra={"run_id": run_id})
         current = run_store.get(run_id) or {}
@@ -161,7 +166,14 @@ def execute_radar(run_id: str) -> None:
             completed_at=utc_now(),
             duration_ms=duration_ms,
             failures=failures,
+            trigger={"type": trigger_type},
         )
+    finally:
+        if lease is not None:
+            try:
+                radar_lock.release(lease)
+            except Exception:
+                logger.exception("Radar lock release failed", extra={"run_id": run_id})
 
 
 @app.get("/api/opportunities")
@@ -182,7 +194,7 @@ def opportunities():
 def run_radar(background_tasks: BackgroundTasks):
     global latest_run
     current = run_store.latest()
-    if current and current.get("status") == "running":
+    if not RADAR_LOCK_ENABLED and current and current.get("status") == "running":
         return {
             "status": "running",
             "run_id": current.get("run_id"),
@@ -190,16 +202,50 @@ def run_radar(background_tasks: BackgroundTasks):
         }
 
     run_id = str(uuid.uuid4())
+    lease = radar_lock.acquire(run_id) if RADAR_LOCK_ENABLED else None
+    if RADAR_LOCK_ENABLED and not lease.acquired:
+        current = run_store.latest() or {}
+        return {
+            "status": "running",
+            "run_id": current.get("run_id"),
+            "message": "Radar is already running.",
+        }
     run = run_store.create(run_id)
+    run["trigger"] = {"type": "manual"}
+    run_store.update(run_id, trigger=run["trigger"])
     latest_run = _compat_status(run)
     _write_legacy_status(run)
-    background_tasks.add_task(execute_radar, run_id)
+
+    def execute_manual_run(_run_id: str):
+        execute_radar(run_id, "manual", lease)
+
+    # Keep the historical one-argument background task shape for local callers.
+    background_tasks.add_task(execute_manual_run, run_id)
 
     return {
         "status": "started",
         "run_id": run_id,
         "message": "JobRadar scan started.",
     }
+
+
+def run_scheduled_radar() -> dict[str, Any]:
+    """Entry point for a private AWS-native scheduler adapter."""
+
+    if not RADAR_SCHEDULE_ENABLED or not RADAR_LOCK_ENABLED:
+        logger.info("Scheduled radar invocation ignored: scheduling disabled")
+        return {"status": "disabled", "reason": "schedule_or_lock_disabled"}
+
+    run_id = str(uuid.uuid4())
+    lease = radar_lock.acquire(run_id) if RADAR_LOCK_ENABLED else None
+    if RADAR_LOCK_ENABLED and not lease.acquired:
+        logger.info("Scheduled radar invocation skipped: lock is held", extra={"run_id": run_id, "trigger": "scheduled"})
+        return {"status": "skipped", "reason": "active_run"}
+
+    run_store.create(run_id)
+    run_store.update(run_id, trigger={"type": "scheduled"})
+    execute_radar(run_id, "scheduled", lease)
+    return {"status": "completed", "run_id": run_id}
 
 
 @app.get("/api/radar/status")

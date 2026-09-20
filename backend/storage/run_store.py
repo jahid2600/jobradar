@@ -25,6 +25,7 @@ def new_run(run_id: str) -> dict[str, Any]:
         "metrics": {},
         "failures": [],
         "generated_query_count": 0,
+        "trigger": {"type": "manual"},
         "notification": {
             "attempted": False,
             "enabled": False,
